@@ -45,28 +45,36 @@ class BioTrawlService(BaseModuleService):
         return entry, f"{self.ENTITY}已{action}"
 
     def _register_samples(self, entry: dict[str, Any]) -> None:
-        """完成分拣后自动将渔获物样品登记到样品管理模块。"""
+        """完成分拣后把生物样品作为来源补送到样品登记，生成同步回执。"""
+        from app.services.sample_registry import SampleRegistryService
+
         station = entry.get("拖网站位", "")
         fisher = entry.get("操作人", "")
         record_time = entry.get("记录时间", "")
-
-        # 创建生物样品登记记录
-        registry_rows = store.rows("sample_registry")
-        new_id = max((int(r.get("id", 0)) for r in registry_rows), default=0) + 1
         sample_no = f"BIO-{entry.get('id'):04d}"
-        sample_entry = {
-            "id": new_id,
-            "样品编号": sample_no,
-            "样品类型": "生物样品",
-            "采集站位": station,
-            "保存方式": "冷藏保存",
-            "存放位置": "实验室冷库",
-            "登记人": fisher,
-            "登记日期": record_time,
-            "备注说明": f"由生物拖网{entry.get('id')}分拣后自动登记，渔获物：{entry.get('渔获物描述', '')}",
-            "status": "待登记",
-            "pending": True,
-            "abnormal": False,
-            "synced_from": "bio_trawl",
-        }
-        registry_rows.append(sample_entry)
+
+        outcome = SampleRegistryService().apply_inbound_sync(
+            self.MODULE,
+            {
+                "id": entry.get("id"),
+                "样品编号": sample_no,
+                "样品类型": "生物样品",
+                "采集站位": station,
+                "保存方式": "冷藏保存",
+                "存放位置": "实验室冷库",
+                "采样人": fisher,
+                "采样时间": record_time,
+                "保存批次": f"{sample_no}-{station}",
+                "备注说明": (
+                    f"由生物拖网{entry.get('id')}分拣后自动登记，"
+                    f"渔获物：{entry.get('渔获物描述', '')}"
+                ),
+            },
+            sample_field="样品编号",
+            station_field="采集站位",
+            batch_field="保存批次",
+        )
+        if outcome and outcome.get("receipt"):
+            entry["入库同步回执"] = outcome["receipt"]
+            entry["同步回执"] = outcome["receipt"]
+            entry["关联登记项"] = outcome["receipt"].get("登记项id")

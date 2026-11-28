@@ -45,11 +45,15 @@ class SedimentSampleService(BaseModuleService):
         return entry, f"{self.ENTITY}已{action}"
 
     def _update_registry_on_split(self, entry: dict[str, Any]) -> None:
-        """分割后更新样品登记的存放信息。"""
+        """分割后更新样品登记的存放信息；同号多份实物时按站位定位。"""
+        from app.services.sample_registry import SampleRegistryService
+
         sample_no = entry.get("样品编号", "")
-        existing = store.find_one_by("sample_registry", "样品编号", sample_no)
+        existing = SampleRegistryService().find_physical_item(
+            sample_no, entry.get("采样站位", "")
+        )
         if existing:
             existing["保存方式"] = "分层保存（已分割）"
             existing["存放位置"] = f"沉积物库-{entry.get('采样站位', '')}"
-            existing["pending"] = True
+            existing["pending"] = existing.get("status") in ("待登记", "已登记")
             existing["备注说明"] = f"{existing.get('备注说明', '')} | 已分割为{entry.get('柱状长度', '')}段"

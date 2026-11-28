@@ -52,6 +52,8 @@
           <td class="row-actions">
             <button v-for="action in meta.actions" :key="action" class="link" type="button"
               :data-testid="`action-${row.id}-${action}`" @click="runAction(action, row)">{{ action }}</button>
+            <button v-if="meta.key === 'sample_registry'" class="link" type="button"
+              :data-testid="`detail-${row.id}`" @click="openDetail(row)">登记详情</button>
           </td>
         </tr>
         <tr v-if="!rows.length">
@@ -59,6 +61,42 @@
         </tr>
       </tbody>
     </table>
+
+    <section v-if="detail" class="detail-panel" data-testid="registry-detail">
+      <header class="detail-head">
+        <h3>登记详情：{{ detail.样品编号 }} / {{ detail.采集站位 }}</h3>
+        <button class="btn ghost" type="button" data-testid="close-detail" @click="detail = null">关闭</button>
+      </header>
+      <dl class="detail-grid">
+        <div><dt>当前状态</dt><dd data-testid="detail-status">{{ detail.status }}</dd></div>
+        <div><dt>保存批次</dt><dd data-testid="detail-batch">{{ detail.保存批次 }}（{{ detail.批次状态 }}）</dd></div>
+        <div><dt>实际来源</dt><dd data-testid="detail-source">{{ detail.实际来源 }}</dd></div>
+        <div><dt>实际保管</dt><dd data-testid="detail-custodian">{{ detail.实际保管 }}</dd></div>
+        <div><dt>取样资格</dt><dd data-testid="detail-sampling">{{ detail.取样资格 }}</dd></div>
+        <div><dt>分析可用资格</dt><dd data-testid="detail-analysis">{{ detail.analysis_eligible ? '可用' : '不可用' }}</dd></div>
+        <div><dt>关联实物</dt><dd data-testid="detail-physical">{{ detail.关联实物?.实物编号 }}（登记项 {{ detail.关联实物?.登记项编号 }}）</dd></div>
+        <div><dt>后续处理</dt><dd data-testid="detail-next">{{ detail.后续处理 }}</dd></div>
+      </dl>
+      <h4>入库同步回执</h4>
+      <table class="data-table" data-testid="detail-receipts">
+        <thead>
+          <tr><th>回执编号</th><th>来源模块</th><th>来源单号</th><th>来源批次</th><th>关联实物</th><th>状态</th></tr>
+        </thead>
+        <tbody>
+          <tr v-for="receipt in detail.入库同步回执" :key="receipt.回执编号" :data-testid="`receipt-${receipt.回执编号}`">
+            <td>{{ receipt.回执编号 }}</td>
+            <td>{{ receipt.来源模块 }}</td>
+            <td>{{ receipt.来源单号 }}</td>
+            <td>{{ receipt.来源批次 }}</td>
+            <td>{{ receipt.关联实物?.实物编号 }} / {{ receipt.关联实物?.采集站位 }}</td>
+            <td>{{ receipt.状态 }}</td>
+          </tr>
+          <tr v-if="!detail.入库同步回执.length">
+            <td colspan="6" class="empty-state">暂无入库同步回执</td>
+          </tr>
+        </tbody>
+      </table>
+    </section>
 
     <div v-if="showCreate" class="modal-backdrop" data-testid="create-modal">
       <form class="modal" @submit.prevent="submitCreate">
@@ -84,8 +122,8 @@
 </template>
 
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
-import { createEntry, downloadEntries, listEntries, moduleMeta, runAction as applyAction } from '@/api/backend-service'
+import { computed, onMounted, ref, watch } from 'vue'
+import { createEntry, downloadEntries, fetchEntry, listEntries, moduleMeta, runAction as applyAction } from '@/api/backend-service'
 import type { EntryRow } from '@/data/types'
 
 const props = defineProps<{ moduleKey: string }>()
@@ -98,6 +136,7 @@ const filterFields = meta.fields.slice(0, 3)
 const showCreate = ref(false)
 const creating = ref(false)
 const createValues = ref<Record<string, string>>({})
+const detail = ref<Record<string, any> | null>(null)
 
 const stats = computed(() => [
   { label: meta.metrics[0], value: total.value },
@@ -137,9 +176,19 @@ async function runAction(action: string, row: EntryRow) {
   try {
     const r = await applyAction(meta.key, Number(row.id), action)
     if (!r.ok) throw new Error(r.message)
+    detail.value = null
     await reload()
   } catch (e) { errorMessage.value = e instanceof Error ? e.message : '操作失败' }
 }
+
+async function openDetail(row: EntryRow) {
+  errorMessage.value = ''
+  try {
+    detail.value = await fetchEntry(meta.key, Number(row.id))
+  } catch (e) { errorMessage.value = e instanceof Error ? e.message : '登记详情读取失败' }
+}
+
+watch(() => props.moduleKey, () => { detail.value = null; filters.value = {}; void reload() })
 
 async function reload() {
   errorMessage.value = ''
@@ -158,4 +207,9 @@ onMounted(reload)
 .create-field { display:flex; flex-direction:column; gap:4px; margin-bottom:12px; }
 .create-field span { font-size:13px; color:var(--text-secondary,#4a5568); }
 .create-field input { padding:6px 8px; border:1px solid var(--border-color,#e2e8f0); border-radius:4px; font-size:13px; }
+.detail-panel { margin-top:24px; padding:16px; border:1px solid var(--border-color,#e2e8f0); border-radius:8px; background:#fff; }
+.detail-head { display:flex; align-items:center; justify-content:space-between; margin-bottom:12px; }
+.detail-grid { display:grid; grid-template-columns:repeat(auto-fit,minmax(220px,1fr)); gap:8px 16px; margin:0 0 16px; }
+.detail-grid dt { font-size:12px; color:var(--text-secondary,#4a5568); }
+.detail-grid dd { margin:2px 0 0; font-size:14px; }
 </style>

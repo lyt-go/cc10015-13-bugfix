@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import csv
+import inspect
 import io
 from typing import Any
 
@@ -116,6 +117,82 @@ def module_snapshot(module: str) -> dict[str, Any]:
     return base
 
 
+@router.get("/sample_inbound_receipts")
+def list_inbound_receipts(
+    source_module: str | None = Query(default=None),
+    source_id: str | None = Query(default=None),
+    registry_id: int | None = Query(default=None),
+    request_key: str | None = Query(default=None),
+) -> dict[str, Any]:
+    """入库同步回执查询：按来源单据、请求键或登记项找回原回执。"""
+    from app.services.sample_registry import SampleRegistryService
+
+    service = SampleRegistryService()
+    receipts = service.list_receipts()
+    if source_module:
+        receipts = [r for r in receipts if r.get("来源模块") == source_module]
+    if source_id:
+        receipts = [r for r in receipts if str(r.get("来源单号")) == str(source_id)]
+    if request_key:
+        receipts = [r for r in receipts if r.get("请求键") == request_key]
+    if registry_id is not None:
+        receipts = [
+            r for r in receipts
+            if str(r.get("登记项id")) == str(registry_id)
+            or str(r.get("关联登记项")) == str(registry_id)
+        ]
+    items = [service._receipt_with_physical(r) for r in receipts]
+    return {"items": items, "total": len(items)}
+
+
+@router.get("/sample_inbound_receipts/{receipt_no}")
+def get_inbound_receipt(receipt_no: str) -> dict[str, Any]:
+    """按回执编号找回原回执；采样侧重送时也只返回这一张。"""
+    from app.services.sample_registry import SampleRegistryService
+
+    service = SampleRegistryService()
+    service.list_receipts()
+    receipt = service._find_receipt_by_no(receipt_no)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail=f"入库同步回执 {receipt_no} 不存在")
+    return service._receipt_with_physical(receipt)
+
+
+@router.get("/sampling_record/{entry_id}/sync-receipt")
+def sampling_sync_receipt(entry_id: int) -> dict[str, Any]:
+    """采样单的入库同步回执；成功失联后重送也只返回这张原回执。"""
+    from app.services.sample_registry import SampleRegistryService
+
+    service = SampleRegistryService()
+    service.list_receipts()
+    receipt = service.find_receipt("sampling_record", entry_id)
+    if receipt is None:
+        raise HTTPException(status_code=404, detail=f"采样单 {entry_id} 尚未生成入库同步回执")
+    return service._receipt_with_physical(receipt)
+
+
+@router.get("/sample_registry/{entry_id}/receipts")
+def registry_receipts(entry_id: int) -> dict[str, Any]:
+    """登记详情里的同步回执与关联实物。"""
+    from app.services.sample_registry import SampleRegistryService
+
+    service = SampleRegistryService()
+    row = store.find("sample_registry", entry_id)
+    if row is None:
+        raise HTTPException(status_code=404, detail=f"样品登记簿 {entry_id} 不存在或已归档")
+    service.ensure_inventory_fields(row)
+    items = [
+        service._receipt_with_physical(receipt)
+        for receipt in service.receipts_for_registry(entry_id)
+    ]
+    return {
+        "登记项id": entry_id,
+        "关联实物": service.physical_item(row),
+        "items": items,
+        "total": len(items),
+    }
+
+
 @router.get("/cross-links")
 def cross_links() -> dict[str, Any]:
     """返回所有模块间的关联关系。"""
@@ -213,5 +290,11 @@ def create_entry(module: str, payload: EntryPayload) -> ActionResult:
 @router.post("/{module}/{entry_id}/actions", response_model=ActionResult)
 def run_action(module: str, entry_id: int, payload: ActionPayload) -> ActionResult:
     service = require_service(module)
-    entry, message = service.run_action(entry_id, payload.action.strip())
+    action = payload.action.strip()
+    if "remark" in inspect.signature(service.run_action).parameters:
+        entry, message = service.run_action(entry_id, action, payload.remark)
+    else:
+        entry, message = service.run_action(entry_id, action)
+    if entry is not None and module == "sample_registry":
+        entry = service.build_detail(entry)
     return ActionResult(ok=entry is not None, message=message, entry=entry)

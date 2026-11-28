@@ -29,11 +29,18 @@ export async function runAction(
   key: string,
   id: number,
   action: string,
+  remark?: string,
 ): Promise<ActionResult> {
   const response = await request(`/api/${key}/${id}/actions`, {
     method: 'POST',
-    body: JSON.stringify({ action }),
+    body: JSON.stringify({ action, remark }),
   })
+  return await response.json()
+}
+
+export async function fetchEntry(key: string, id: number): Promise<Record<string, any>> {
+  const response = await request(`/api/${key}/${id}`)
+  if (!response.ok) throw new Error('登记详情读取失败')
   return await response.json()
 }
 
